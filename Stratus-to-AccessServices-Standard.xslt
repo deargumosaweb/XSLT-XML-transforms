@@ -1,9 +1,43 @@
 <?xml version="1.0"?>
 <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns="http://www.redbeemedia.com/nucleus/metadata/ns/v1/standard_metadata" xmlns:cn="http://www.redbeemedia.com/nucleus/metadata/ns/v1/content" xmlns:au="http://www.redbeemedia.com/nucleus/metadata/ns/v1/audio_layout" xmlns:sg="http://www.redbeemedia.com/nucleus/metadata/ns/v1/segmentation" xmlns:mk="http://www.redbeemedia.com/nucleus/metadata/ns/v1/markers" xmlns:id="http://www.redbeemedia.com/nucleus/metadata/ns/v1/identification" xmlns:ed="http://www.redbeemedia.com/nucleus/metadata/ns/v1/editorial" xmlns:tn="http://www.redbeemedia.com/nucleus/metadata/ns/v1/technical" xmlns:tc="http://screenstaring.com/xslt/timecode" xmlns:qc="http://www.redbeemedia.com/nucleus/metadata/ns/v1/qc" exclude-result-prefixes="tc" version="1.0">
 	<xsl:output method="xml" version="1.0" encoding="UTF-8" indent="yes" omit-xml-declaration="yes"/>
+	<!-- Convert timecode to frames -->
+	<xsl:template name="timecodeToFrames">
+		<xsl:param name="timecode"/>
+		<xsl:param name="fps" select="25"/>
+		<xsl:variable name="hours" select="substring-before($timecode, ':')"/>
+		<xsl:variable name="remaining" select="substring-after($timecode, ':')"/>
+		<xsl:variable name="minutes" select="substring-before($remaining, ':')"/>
+		<xsl:variable name="remainingSeconds" select="substring-after($remaining, ':')"/>
+		<xsl:variable name="seconds" select="substring-before($remainingSeconds, ':')"/>
+		<xsl:variable name="frames" select="substring-after($remainingSeconds, ':')"/>
+		<xsl:value-of select="(($hours * 3600 + $minutes * 60 + $seconds) * $fps) + $frames"/>
+	</xsl:template>
+	<!-- Convert frames to timecode -->
+	<xsl:template name="framesToTimecode">
+		<xsl:param name="frames"/>
+		<!-- Convert total frames (50 fps) to timecode at 25 fps -->
+		<xsl:variable name="totalFrames25" select="floor($frames div 2)"/>
+		<!-- Compute time components -->
+		<xsl:variable name="totalSeconds" select="floor($totalFrames25 div 25)"/>
+		<xsl:variable name="framesPart" select="$totalFrames25 mod 25"/>
+		<xsl:variable name="seconds" select="$totalSeconds mod 60"/>
+		<xsl:variable name="totalMinutes" select="floor($totalSeconds div 60)"/>
+		<xsl:variable name="minutes" select="$totalMinutes mod 60"/>
+		<xsl:variable name="hours" select="floor($totalMinutes div 60)"/>
+		<!-- Output formatted timecode -->
+		<xsl:value-of select="format-number($hours, '00')"/>
+		<xsl:text>:</xsl:text>
+		<xsl:value-of select="format-number($minutes, '00')"/>
+		<xsl:text>:</xsl:text>
+		<xsl:value-of select="format-number($seconds, '00')"/>
+		<xsl:text>:</xsl:text>
+		<xsl:value-of select="format-number($framesPart, '00')"/>
+	</xsl:template>
 	<xsl:template match="/">
-		<xsl:comment>Generated from Stratus to Nucleus Standard Transform v0.9 ealedea</xsl:comment>
+		<xsl:comment>Generated from Stratus to Nucleus Standard Transform v0.10 ealedea</xsl:comment>
 		<Nucleus xmlns="http://www.redbeemedia.com/nucleus/metadata/ns/v1/standard_metadata" xmlns:cn="http://www.redbeemedia.com/nucleus/metadata/ns/v1/content" xmlns:au="http://www.redbeemedia.com/nucleus/metadata/ns/v1/audio_layout" xmlns:sg="http://www.redbeemedia.com/nucleus/metadata/ns/v1/segmentation" xmlns:mk="http://www.redbeemedia.com/nucleus/metadata/ns/v1/markers" xmlns:id="http://www.redbeemedia.com/nucleus/metadata/ns/v1/identification" xmlns:ed="http://www.redbeemedia.com/nucleus/metadata/ns/v1/editorial" xmlns:tn="http://www.redbeemedia.com/nucleus/metadata/ns/v1/technical" xmlns:qc="http://www.redbeemedia.com/nucleus/metadata/ns/v1/qc">
+			<!-- Nucleus Indentifiers -->
 			<id:Identifiers>
 				<xsl:choose>
 					<xsl:when test="/Asset/Properties/Properties[@Key='CustomMd_Mat ID']/*/* != ''">
@@ -152,68 +186,51 @@
 			</sg:Order>
 			<sg:Item_Type>PART</sg:Item_Type>
 			<sg:Mark_In>
-				<xsl:choose>
-					<!-- If the property exists and contains a value -->
-					<xsl:when test="Properties/Properties[@Key='InTc']/*/* != ''">
-						<xsl:value-of select="translate(Properties/Properties[@Key='InTc']/*/*, '.', ':')"/>
-					</xsl:when>
-					<!-- Fallback to default value if the property is missing or empty -->
-					<xsl:otherwise>00:00:00:00</xsl:otherwise>
-				</xsl:choose>
+				<xsl:variable name="baseTimecode" select="translate(/Asset/Properties/Properties[@Key='MarkInStr']/Value/string, '.', ':')"/>
+				<xsl:variable name="baseFrames">
+					<xsl:call-template name="timecodeToFrames">
+						<xsl:with-param name="timecode" select="$baseTimecode"/>
+						<xsl:with-param name="fps" select="25"/>
+					</xsl:call-template>
+				</xsl:variable>
+				<xsl:variable name="segmentOffsetRaw" select="Properties/Properties[@Key='In']/Value/long"/>
+				<!-- Use rounding instead of floor division -->
+				<xsl:variable name="segmentOffset" select="floor($segmentOffsetRaw)"/>
+				<xsl:variable name="totalFrames" select="($baseFrames * 2) + $segmentOffset"/>
+				<xsl:variable name="newTimecode">
+					<xsl:call-template name="framesToTimecode">
+						<xsl:with-param name="frames" select="$totalFrames"/>
+					</xsl:call-template>
+				</xsl:variable>
+				<xsl:value-of select="$newTimecode"/>
 			</sg:Mark_In>
 			<sg:Duration>
 				<xsl:choose>
 					<!-- Case 1: DurationTc is available (timecode format) -->
-					<xsl:when test="Properties/Properties[@Key='DurationTc']/*/* != ''">
-						<xsl:value-of select="translate(Properties/Properties[@Key='DurationTc']/*/*, '.',':')"/>
+					<xsl:when test="Properties/Properties[@Key='DurationTc']/Value/string != ''">
+						<xsl:value-of select="translate(Properties/Properties[@Key='DurationTc']/Value/string, '.',':')"/>
 					</xsl:when>
 					<!-- Case 2: Duration is available (frame count) -->
-					<xsl:when test="Properties/Properties[@Key='Duration']/*/* != ''">
-						<xsl:variable name="duration">
-							<xsl:value-of select="Properties/Properties[@Key='Duration']/*/*"/>
-						</xsl:variable>
-						<xsl:call-template name="framesToTime">
+					<xsl:when test="Properties/Properties[@Key='Duration']/Value/long != ''">
+						<xsl:variable name="duration" select="Properties/Properties[@Key='Duration']/Value/long"/>
+						<xsl:call-template name="framesToTimecode">
 							<xsl:with-param name="frames" select="$duration"/>
 						</xsl:call-template>
 					</xsl:when>
 					<!-- Case 3: Calculate duration from In and Out -->
 					<xsl:otherwise>
-						<xsl:variable name="in">
-							<xsl:value-of select="Properties/Properties[@Key='In']/*/*"/>
-						</xsl:variable>
-						<xsl:variable name="out">
-							<xsl:value-of select="Properties/Properties[@Key='Out']/*/*"/>
-						</xsl:variable>
+						<xsl:variable name="in" select="Properties/Properties[@Key='In']/Value/long"/>
+						<xsl:variable name="out" select="Properties/Properties[@Key='Out']/Value/long"/>
 						<xsl:variable name="duration" select="$out - $in"/>
-						<xsl:call-template name="framesToTime">
+						<xsl:call-template name="framesToTimecode">
 							<xsl:with-param name="frames" select="$duration"/>
 						</xsl:call-template>
 					</xsl:otherwise>
 				</xsl:choose>
 			</sg:Duration>
 			<sg:Description>
-				<xsl:value-of select="Properties/Properties[@Key='Name']/*/*"/>
+				<xsl:value-of select="Properties/Properties[@Key='Name']/Value/string"/>
 			</sg:Description>
 		</sg:Log_Item>
-	</xsl:template>
-	<xsl:template name="framesToTime">
-		<xsl:param name="frames"/>
-		<!-- Convert total frames (50 fps) to timecode at 25 fps -->
-		<xsl:variable name="totalFrames25" select="floor($frames div 2)"/>
-		<!-- Compute time components -->
-		<xsl:variable name="totalSeconds" select="floor($totalFrames25 div 25)"/>
-		<xsl:variable name="framesPart" select="$totalFrames25 mod 25"/>
-		<xsl:variable name="seconds" select="$totalSeconds mod 60"/>
-		<xsl:variable name="totalMinutes" select="floor($totalSeconds div 60)"/>
-		<xsl:variable name="minutes" select="$totalMinutes mod 60"/>
-		<xsl:variable name="hours" select="floor($totalMinutes div 60)"/>
-		<!-- Output formatted timecode -->
-		<xsl:value-of select="format-number($hours, '00')"/>
-		<xsl:text>:</xsl:text>
-		<xsl:value-of select="format-number($minutes, '00')"/>
-		<xsl:text>:</xsl:text>
-		<xsl:value-of select="format-number($seconds, '00')"/>
-		<xsl:text>:</xsl:text>
-		<xsl:value-of select="format-number($framesPart, '00')"/>
 	</xsl:template>
 </xsl:stylesheet>
